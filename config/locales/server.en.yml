@@ -1,3 +1,5 @@
 en:
-  calendar_rsvp_posts:
-    name: "Calendar RSVP Posts"
+  admin:
+    site_settings:
+      categories:
+        calendar_rsvp_posts: "Calendar RSVP Posts"
