@@ -1,0 +1,21 @@
+calendar_rsvp_posts:
+  calendar_rsvp_posts_on_new_going:
+    default: true
+    client: true
+    description: "Create topic reply when a user RSVPs 'Going'"
+  calendar_rsvp_posts_on_new_interested:
+    default: false
+    client: true
+    description: "Create topic reply when a user RSVPs 'Interested'"
+  calendar_rsvp_posts_on_new_not_going:
+    default: false
+    client: true
+    description: "Create topic reply when a user RSVPs 'Not going'"
+  calendar_rsvp_posts_on_removed_rsvp:
+    default: true
+    client: true
+    description: "Create topic reply when a user's RSVP is removed"
+  calendar_rsvp_posts_allow_past_events:
+    default: false
+    client: true
+    description: "Allow generating RSVP replies for events that start in the past"
