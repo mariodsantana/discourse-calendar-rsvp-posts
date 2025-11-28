@@ -19,3 +19,7 @@ calendar_rsvp_posts:
     default: false
     client: true
     description: "Allow generating RSVP replies for events that start in the past"
+  calendar_rsvp_posts_enable_history:
+    default: true
+    client: true
+    description: "Maintain a timestamped history post. When disabled, only the latest notification post is kept."
