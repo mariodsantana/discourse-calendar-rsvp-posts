@@ -135,11 +135,11 @@ after_initialize do
   # Build a notification post (simple, short message)
   def build_notification_raw(username, action_label, event, extra_text = nil)
     event_title = (event.name.presence || event.post.topic.title).to_s
-    parts = []
-    parts << CalendarRsvpPosts::NOTIFICATION_MARKER
-    parts << "**#{username} #{action_label}** for *#{event_title}*."
-    parts << extra_text if extra_text.present?
-    parts.join(" ")
+    notification_raw = CalendarRsvpPosts::NOTIFICATION_MARKER + "\n"
+    notification_raw += "**#{event_title}**: "
+    notification_raw += "(#{extra_text}) " if extra_text.present?
+    notification_raw += "**#{username} #{action_label}**"
+    notification_raw
   end
 
   # Main handler for RSVP changes
