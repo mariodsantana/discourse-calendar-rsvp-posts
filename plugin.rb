@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 # name: discourse-calendar-rsvp-posts
 # about: Create short topic replies for RSVP events
-# version: 0.2
+# version: 0.3
 # authors: Mario Santana
 
 after_initialize do
