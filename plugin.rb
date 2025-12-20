@@ -58,7 +58,7 @@ after_initialize do
     
     notification_posts.each do |post|
       begin
-        PostDestroyer.new(Discourse.system_user, post).destroy
+          PostDestroyer.new(Discourse.system_user, post, context: "calendar-rsvp-posts cleanup").destroy
       rescue StandardError => e
         Rails.logger.warn("calendar-rsvp-posts: failed to delete notification post #{post.id}: #{e}")
       end
@@ -289,7 +289,7 @@ after_initialize do
         # Delete all existing RSVP posts
         all_rsvp_posts.each do |post|
           begin
-            PostDestroyer.new(Discourse.system_user, post).destroy
+            PostDestroyer.new(Discourse.system_user, post, context: "calendar-rsvp-posts cleanup").destroy
           rescue StandardError => e
             Rails.logger.warn("calendar-rsvp-posts: failed to delete post #{post.id}: #{e}")
           end
@@ -399,7 +399,7 @@ after_initialize do
             # Delete all existing RSVP posts
             all_rsvp_posts.each do |post|
               begin
-                PostDestroyer.new(Discourse.system_user, post).destroy
+                  PostDestroyer.new(Discourse.system_user, post, context: "calendar-rsvp-posts cleanup").destroy
               rescue StandardError => e
                 Rails.logger.warn("calendar-rsvp-posts: failed to delete post #{post.id}: #{e}")
               end
