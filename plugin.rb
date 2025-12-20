@@ -317,20 +317,18 @@ after_initialize do
   if defined?(DiscoursePostEvent::Invitee)
     DiscoursePostEvent::Invitee.class_eval do
       after_destroy do
-        begin
-          event = self.event
-          next if event.nil?
+        event = self.event
+        # Skip if no event, not configured, or past event (when not allowed)
+        should_process = event.present? &&
+                         SiteSetting.calendar_rsvp_posts_on_removed_rsvp &&
+                         (SiteSetting.calendar_rsvp_posts_allow_past_events || event.starts_at.nil? || event.starts_at >= Time.current)
+        
+        if should_process
+          begin
+            username = self.user&.username || "someone"
+            action_label = I18n.t('calendar_rsvp_posts.actions.removed')
 
-          # post for removed RSVP only if configured
-          next unless SiteSetting.calendar_rsvp_posts_on_removed_rsvp
-          # respect past-event setting
-          next if !SiteSetting.calendar_rsvp_posts_allow_past_events && event.starts_at.present? && event.starts_at < Time.current
-
-          username = self.user&.username || "someone"
-          action_label = I18n.t('calendar_rsvp_posts.actions.removed')
-          event_title = (event.name.presence || event.post.topic.title).to_s
-
-          # Check if history is enabled
+            # Check if history is enabled
           if SiteSetting.calendar_rsvp_posts_enable_history
             # History mode: maintain timestamped history + notification posts
             history_post = find_history_post(event)
