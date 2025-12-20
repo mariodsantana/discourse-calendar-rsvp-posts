@@ -15,7 +15,8 @@ en:
     markers:
       history: "<!-- calendar-rsvp-history -->"
       notification: "<!-- calendar-rsvp-notification -->"
-  admin:
-    site_settings:
-      categories:
-        calendar_rsvp_posts: "Calendar RSVP Posts"
+  admin_js:
+    admin:
+      site_settings:
+        categories:
+          calendar_rsvp_posts: "Calendar RSVP Posts"
