@@ -7,8 +7,14 @@
 after_initialize do
   module ::CalendarRsvpPosts
     PLUGIN_NAME = "discourse-calendar-rsvp-posts"
-    HISTORY_MARKER = "<!-- calendar-rsvp-history -->"
-    NOTIFICATION_MARKER = "<!-- calendar-rsvp-notification -->"
+    
+    def self.history_marker
+      I18n.t('calendar_rsvp_posts.markers.history')
+    end
+    
+    def self.notification_marker
+      I18n.t('calendar_rsvp_posts.markers.notification')
+    end
   end
 
   # Helper to decide if we should ignore this event
@@ -26,8 +32,8 @@ after_initialize do
     event.post.topic.posts
       .where(user_id: Discourse.system_user.id)
       .where("raw LIKE ? OR raw LIKE ?", 
-             "%#{CalendarRsvpPosts::HISTORY_MARKER}%",
-             "%#{CalendarRsvpPosts::NOTIFICATION_MARKER}%")
+             "%#{CalendarRsvpPosts.history_marker}%",
+             "%#{CalendarRsvpPosts.notification_marker}%")
       .order(created_at: :asc)
   end
 
@@ -37,7 +43,7 @@ after_initialize do
     
     event.post.topic.posts
       .where(user_id: Discourse.system_user.id)
-      .where("raw LIKE ?", "%#{CalendarRsvpPosts::HISTORY_MARKER}%")
+      .where("raw LIKE ?", "%#{CalendarRsvpPosts.history_marker}%")
       .order(created_at: :asc)
       .first
   end
@@ -48,7 +54,7 @@ after_initialize do
     
     notification_posts = event.post.topic.posts
       .where(user_id: Discourse.system_user.id)
-      .where("raw LIKE ?", "%#{CalendarRsvpPosts::NOTIFICATION_MARKER}%")
+      .where("raw LIKE ?", "%#{CalendarRsvpPosts.notification_marker}%")
     
     notification_posts.each do |post|
       begin
@@ -71,8 +77,8 @@ after_initialize do
   def build_history_raw(event, new_entry)
     event_title = (event.name.presence || event.post.topic.title).to_s
     parts = []
-    parts << CalendarRsvpPosts::HISTORY_MARKER
-    parts << "### RSVP History for *#{event_title}*"
+    parts << CalendarRsvpPosts.history_marker
+    parts << "### #{I18n.t('calendar_rsvp_posts.history.header', event_title: event_title)}"
     parts << ""
     parts << new_entry
     parts.join("\n")
@@ -103,7 +109,14 @@ after_initialize do
     raw = simple_post.raw
     
     # Try to parse username and action from the post
-    match = raw.match(/\*\*([^\*]+)\s+(is going|is interested|is not going|removed their RSVP)\*\*/)
+    # Build regex pattern with translated action labels
+    going_label = I18n.t('calendar_rsvp_posts.actions.going').gsub('(', '\\(').gsub(')', '\\)')
+    interested_label = I18n.t('calendar_rsvp_posts.actions.interested').gsub('(', '\\(').gsub(')', '\\)')
+    not_going_label = I18n.t('calendar_rsvp_posts.actions.not_going').gsub('(', '\\(').gsub(')', '\\)')
+    removed_label = I18n.t('calendar_rsvp_posts.actions.removed').gsub('(', '\\(').gsub(')', '\\)')
+    
+    pattern = /\*\*([^\*]+)\s+(#{Regexp.escape(going_label)}|#{Regexp.escape(interested_label)}|#{Regexp.escape(not_going_label)}|#{Regexp.escape(removed_label)})\*\*/
+    match = raw.match(pattern)
     if match
       username = match[1]
       action = match[2]
@@ -120,25 +133,29 @@ after_initialize do
       # Build history format
       event_title = (event.name.presence || event.post.topic.title).to_s
       parts = []
-      parts << CalendarRsvpPosts::HISTORY_MARKER
-      parts << "### RSVP History for *#{event_title}*"
+      parts << CalendarRsvpPosts.history_marker
+      parts << "### #{I18n.t('calendar_rsvp_posts.history.header', event_title: event_title)}"
       parts << ""
       parts << first_entry
       parts.join("\n")
     else
       # Couldn't parse, just add history header
       event_title = (event.name.presence || event.post.topic.title).to_s
-      CalendarRsvpPosts::HISTORY_MARKER + "\n### RSVP History for *#{event_title}*\n\n" + raw
+      CalendarRsvpPosts.history_marker + "\n### #{I18n.t('calendar_rsvp_posts.history.header', event_title: event_title)}\n\n" + raw
     end
   end
 
   # Build a notification post (simple, short message)
   def build_notification_raw(username, action_label, event, extra_text = nil)
     event_title = (event.name.presence || event.post.topic.title).to_s
-    notification_raw = CalendarRsvpPosts::NOTIFICATION_MARKER + "\n"
-    notification_raw += "**#{event_title}**: "
-    notification_raw += "(#{extra_text}) " if extra_text.present?
-    notification_raw += "**#{username} #{action_label}**"
+    extra_text_formatted = extra_text.present? ? "#{extra_text} " : ""
+    
+    notification_raw = CalendarRsvpPosts.notification_marker + "\n"
+    notification_raw += I18n.t('calendar_rsvp_posts.notification.template', 
+                              event_title: event_title,
+                              extra: extra_text_formatted,
+                              username: username,
+                              action: action_label)
     notification_raw
   end
 
@@ -169,11 +186,11 @@ after_initialize do
 
       # Determine whether this qualifies as a "new" RSVP (create) or an update
       if new_status == going_val && SiteSetting.calendar_rsvp_posts_on_new_going
-        action_label = "is going"
+        action_label = I18n.t('calendar_rsvp_posts.actions.going')
       elsif new_status == interested_val && SiteSetting.calendar_rsvp_posts_on_new_interested
-        action_label = "is interested"
+        action_label = I18n.t('calendar_rsvp_posts.actions.interested')
       elsif new_status == not_going_val && SiteSetting.calendar_rsvp_posts_on_new_not_going
-        action_label = "is not going"
+        action_label = I18n.t('calendar_rsvp_posts.actions.not_going')
       end
 
       # Nothing configured for this change
@@ -197,9 +214,9 @@ after_initialize do
         is_full = current_going >= event.max_attendees
 
         if was_full && !is_full
-          extra_text = "Spots now available"
+          extra_text = I18n.t('calendar_rsvp_posts.capacity.spots_available')
         elsif !was_full && is_full
-          extra_text = "Now full"
+          extra_text = I18n.t('calendar_rsvp_posts.capacity.now_full')
         end
       end
 
@@ -310,7 +327,7 @@ after_initialize do
           next if !SiteSetting.calendar_rsvp_posts_allow_past_events && event.starts_at.present? && event.starts_at < Time.current
 
           username = self.user&.username || "someone"
-          action_label = "removed their RSVP"
+          action_label = I18n.t('calendar_rsvp_posts.actions.removed')
           event_title = (event.name.presence || event.post.topic.title).to_s
 
           # Check if history is enabled
@@ -322,8 +339,7 @@ after_initialize do
 
             if all_rsvp_posts.empty?
               # First RSVP activity: create simple notification post
-              notification_raw = CalendarRsvpPosts::NOTIFICATION_MARKER + "\n"
-              notification_raw += "**#{username} #{action_label}** for *#{event_title}*."
+              notification_raw = build_notification_raw(username, action_label, event)
               PostCreator.create!(
                 Discourse.system_user,
                 topic_id: event.post.topic_id,
@@ -346,8 +362,7 @@ after_initialize do
               )
 
               # Create new notification post
-              notification_raw = CalendarRsvpPosts::NOTIFICATION_MARKER + "\n"
-              notification_raw += "**#{username} #{action_label}** for *#{event_title}*."
+              notification_raw = build_notification_raw(username, action_label, event)
               PostCreator.create!(
                 Discourse.system_user,
                 topic_id: event.post.topic_id,
@@ -369,8 +384,7 @@ after_initialize do
               delete_notification_posts(event)
 
               # Create new notification post
-              notification_raw = CalendarRsvpPosts::NOTIFICATION_MARKER + "\n"
-              notification_raw += "**#{username} #{action_label}** for *#{event_title}*."
+              notification_raw = build_notification_raw(username, action_label, event)
               PostCreator.create!(
                 Discourse.system_user,
                 topic_id: event.post.topic_id,
@@ -392,8 +406,7 @@ after_initialize do
             end
 
             # Create new notification post
-            notification_raw = CalendarRsvpPosts::NOTIFICATION_MARKER + "\n"
-            notification_raw += "**#{username} #{action_label}** for *#{event_title}*."
+            notification_raw = build_notification_raw(username, action_label, event)
             PostCreator.create!(
               Discourse.system_user,
               topic_id: event.post.topic_id,

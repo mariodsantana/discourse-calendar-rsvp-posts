@@ -1,4 +1,20 @@
 en:
+  calendar_rsvp_posts:
+    actions:
+      going: "is going"
+      interested: "is interested"
+      not_going: "is not going"
+      removed: "removed their RSVP"
+    capacity:
+      spots_available: "Spots now available"
+      now_full: "Now full"
+    history:
+      header: "RSVP History for *%{event_title}*"
+    notification:
+      template: "%{event_title}: %{extra}**%{username} %{action}**"
+    markers:
+      history: "<!-- calendar-rsvp-history -->"
+      notification: "<!-- calendar-rsvp-notification -->"
   admin:
     site_settings:
       categories:
