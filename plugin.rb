@@ -2,7 +2,7 @@
 # name: discourse-calendar-rsvp-posts
 # about: Create short topic replies for RSVP events
 # version: 0.4
-# authors: Mario Santana
+# authors: Mario Santana, gilles
 
 after_initialize do
   module ::CalendarRsvpPosts
