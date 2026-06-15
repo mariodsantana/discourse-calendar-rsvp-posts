@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 # name: discourse-calendar-rsvp-posts
 # about: Create short topic replies for RSVP events
-# version: 0.3
+# version: 0.4
 # authors: Mario Santana
 
 after_initialize do
@@ -157,6 +157,116 @@ after_initialize do
                                 action: action_label)
       notification_raw
     end
+
+    # Central place that creates/revises/deletes the RSVP posts for an event.
+    # Wrapped in a per-event mutex so concurrent background jobs for the same
+    # event can't race each other and create duplicate posts.
+    def self.publish_rsvp_update(event, username, action_label, extra_text = nil)
+      DistributedMutex.synchronize("calendar_rsvp_posts_event_#{event.id}") do
+        if SiteSetting.calendar_rsvp_posts_enable_history
+          # History mode: maintain timestamped history + notification posts
+          history_post = find_history_post(event)
+          all_rsvp_posts = find_rsvp_posts(event)
+          new_entry = build_history_entry(username, action_label, extra_text)
+
+          if all_rsvp_posts.empty?
+            # First RSVP: create simple notification post (no history format yet)
+            notification_raw = build_notification_raw(username, action_label, event, extra_text)
+            PostCreator.create!(
+              Discourse.system_user,
+              topic_id: event.post.topic_id,
+              raw: notification_raw,
+              skip_validations: true
+            )
+          elsif history_post.nil?
+            # Second RSVP: convert first post to history format
+            first_post = all_rsvp_posts.first
+            history_raw = convert_to_history(first_post, event)
+            history_raw = append_to_history(history_raw, new_entry)
+
+            # Update the first post to be the history
+            revisor = PostRevisor.new(first_post, event.post.topic)
+            revisor.revise!(
+              Discourse.system_user,
+              raw: history_raw,
+              skip_validations: true,
+              skip_revision: false
+            )
+
+            # Create new notification post
+            notification_raw = build_notification_raw(username, action_label, event, extra_text)
+            PostCreator.create!(
+              Discourse.system_user,
+              topic_id: event.post.topic_id,
+              raw: notification_raw,
+              skip_validations: true
+            )
+          else
+            # Third+ RSVP: append to existing history
+            updated_raw = append_to_history(history_post.raw, new_entry)
+            revisor = PostRevisor.new(history_post, event.post.topic)
+            revisor.revise!(
+              Discourse.system_user,
+              raw: updated_raw,
+              skip_validations: true,
+              skip_revision: false
+            )
+
+            # Delete old notification posts
+            delete_notification_posts(event)
+
+            # Create new notification post to trigger notifications
+            notification_raw = build_notification_raw(username, action_label, event, extra_text)
+            PostCreator.create!(
+              Discourse.system_user,
+              topic_id: event.post.topic_id,
+              raw: notification_raw,
+              skip_validations: true
+            )
+          end
+        else
+          # No history mode: just delete old posts and create new notification
+          all_rsvp_posts = find_rsvp_posts(event)
+
+          # Delete all existing RSVP posts
+          all_rsvp_posts.each do |post|
+            begin
+              PostDestroyer.new(Discourse.system_user, post, context: "calendar-rsvp-posts cleanup").destroy
+            rescue StandardError => e
+              Rails.logger.warn("calendar-rsvp-posts: failed to delete post #{post.id}: #{e}")
+            end
+          end
+
+          # Create new notification post
+          notification_raw = build_notification_raw(username, action_label, event, extra_text)
+          PostCreator.create!(
+            Discourse.system_user,
+            topic_id: event.post.topic_id,
+            raw: notification_raw,
+            skip_validations: true
+          )
+        end
+      end
+    end
+  end
+
+  # Background job: do the post writes off the request/callback path so the
+  # synchronous RSVP status change doesn't race the calendar's avatar render
+  # (the duplicate-avatar bug). Re-loads the event by id when it runs.
+  module ::Jobs
+    class ProcessCalendarRsvpPost < ::Jobs::Base
+      def execute(args)
+        event = DiscoursePostEvent::Event.find_by(id: args[:event_id])
+        return unless event
+
+        ::CalendarRsvpPosts.publish_rsvp_update(
+          event,
+          args[:username],
+          args[:action_label],
+          args[:extra_text]
+        )
+      end
+    end
   end
 
   # Main handler for RSVP changes
@@ -220,90 +330,15 @@ after_initialize do
         end
       end
 
-      # Check if history is enabled
-      if SiteSetting.calendar_rsvp_posts_enable_history
-        # History mode: maintain timestamped history + notification posts
-        history_post = CalendarRsvpPosts.find_history_post(event)
-        all_rsvp_posts = CalendarRsvpPosts.find_rsvp_posts(event)
-        new_entry = CalendarRsvpPosts.build_history_entry(username, action_label, extra_text)
-
-        if all_rsvp_posts.empty?
-          # First RSVP: create simple notification post (no history format yet)
-          notification_raw = CalendarRsvpPosts.build_notification_raw(username, action_label, event, extra_text)
-          PostCreator.create!(
-            Discourse.system_user,
-            topic_id: event.post.topic_id,
-            raw: notification_raw,
-            skip_validations: true
-          )
-        elsif history_post.nil?
-          # Second RSVP: convert first post to history format
-          first_post = all_rsvp_posts.first
-          history_raw = CalendarRsvpPosts.convert_to_history(first_post, event)
-          history_raw = CalendarRsvpPosts.append_to_history(history_raw, new_entry)
-          
-          # Update the first post to be the history
-          revisor = PostRevisor.new(first_post, event.post.topic)
-          revisor.revise!(
-            Discourse.system_user,
-            raw: history_raw,
-            skip_validations: true,
-            skip_revision: false
-          )
-
-          # Create new notification post
-          notification_raw = CalendarRsvpPosts.build_notification_raw(username, action_label, event, extra_text)
-          PostCreator.create!(
-            Discourse.system_user,
-            topic_id: event.post.topic_id,
-            raw: notification_raw,
-            skip_validations: true
-          )
-        else
-          # Third+ RSVP: append to existing history
-          updated_raw = CalendarRsvpPosts.append_to_history(history_post.raw, new_entry)
-          revisor = PostRevisor.new(history_post, event.post.topic)
-          revisor.revise!(
-            Discourse.system_user,
-            raw: updated_raw,
-            skip_validations: true,
-            skip_revision: false
-          )
-
-          # Delete old notification posts
-          CalendarRsvpPosts.delete_notification_posts(event)
-
-          # Create new notification post to trigger notifications
-          notification_raw = CalendarRsvpPosts.build_notification_raw(username, action_label, event, extra_text)
-          PostCreator.create!(
-            Discourse.system_user,
-            topic_id: event.post.topic_id,
-            raw: notification_raw,
-            skip_validations: true
-          )
-        end
-      else
-        # No history mode: just delete old posts and create new notification
-        all_rsvp_posts = CalendarRsvpPosts.find_rsvp_posts(event)
-        
-        # Delete all existing RSVP posts
-        all_rsvp_posts.each do |post|
-          begin
-            PostDestroyer.new(Discourse.system_user, post, context: "calendar-rsvp-posts cleanup").destroy
-          rescue StandardError => e
-            Rails.logger.warn("calendar-rsvp-posts: failed to delete post #{post.id}: #{e}")
-          end
-        end
-
-        # Create new notification post
-        notification_raw = CalendarRsvpPosts.build_notification_raw(username, action_label, event, extra_text)
-        PostCreator.create!(
-          Discourse.system_user,
-          topic_id: event.post.topic_id,
-          raw: notification_raw,
-          skip_validations: true
-        )
-      end
+      # Hand the post writes to a background job instead of doing them inside the
+      # invitee status-change callback (that raced the calendar avatar render).
+      Jobs.enqueue(
+        :process_calendar_rsvp_post,
+        event_id: event.id,
+        username: username,
+        action_label: action_label,
+        extra_text: extra_text
+      )
     rescue StandardError => e
       Rails.logger.warn("calendar-rsvp-posts: handler error: #{e}")
       Rails.logger.warn(e.backtrace.join("\n"))
@@ -328,90 +363,14 @@ after_initialize do
             username = self.user&.username || "someone"
             action_label = I18n.t('calendar_rsvp_posts.actions.removed')
 
-            # Check if history is enabled
-            if SiteSetting.calendar_rsvp_posts_enable_history
-              # History mode: maintain timestamped history + notification posts
-              history_post = CalendarRsvpPosts.find_history_post(event)
-              all_rsvp_posts = CalendarRsvpPosts.find_rsvp_posts(event)
-              new_entry = CalendarRsvpPosts.build_history_entry(username, action_label)
-
-              if all_rsvp_posts.empty?
-                # First RSVP activity: create simple notification post
-                notification_raw = CalendarRsvpPosts.build_notification_raw(username, action_label, event)
-                PostCreator.create!(
-                  Discourse.system_user,
-                  topic_id: event.post.topic_id,
-                  raw: notification_raw,
-                  skip_validations: true
-                )
-              elsif history_post.nil?
-                # Second RSVP activity: convert first post to history format
-                first_post = all_rsvp_posts.first
-                history_raw = CalendarRsvpPosts.convert_to_history(first_post, event)
-                history_raw = CalendarRsvpPosts.append_to_history(history_raw, new_entry)
-                
-                # Update the first post to be the history
-                revisor = PostRevisor.new(first_post, event.post.topic)
-                revisor.revise!(
-                  Discourse.system_user,
-                  raw: history_raw,
-                  skip_validations: true,
-                  skip_revision: false
-                )
-
-                # Create new notification post
-                notification_raw = CalendarRsvpPosts.build_notification_raw(username, action_label, event)
-                PostCreator.create!(
-                  Discourse.system_user,
-                  topic_id: event.post.topic_id,
-                  raw: notification_raw,
-                  skip_validations: true
-                )
-              else
-                # Third+ RSVP activity: append to existing history
-                updated_raw = CalendarRsvpPosts.append_to_history(history_post.raw, new_entry)
-                revisor = PostRevisor.new(history_post, event.post.topic)
-                revisor.revise!(
-                  Discourse.system_user,
-                  raw: updated_raw,
-                  skip_validations: true,
-                  skip_revision: false
-                )
-
-                # Delete old notification posts
-                CalendarRsvpPosts.delete_notification_posts(event)
-
-                # Create new notification post
-                notification_raw = CalendarRsvpPosts.build_notification_raw(username, action_label, event)
-                PostCreator.create!(
-                  Discourse.system_user,
-                  topic_id: event.post.topic_id,
-                  raw: notification_raw,
-                  skip_validations: true
-                )
-              end
-            else
-              # No history mode: just delete old posts and create new notification
-              all_rsvp_posts = CalendarRsvpPosts.find_rsvp_posts(event)
-              
-              # Delete all existing RSVP posts
-              all_rsvp_posts.each do |post|
-                begin
-                  PostDestroyer.new(Discourse.system_user, post, context: "calendar-rsvp-posts cleanup").destroy
-                rescue StandardError => e
-                  Rails.logger.warn("calendar-rsvp-posts: failed to delete post #{post.id}: #{e}")
-                end
-              end
-
-              # Create new notification post
-              notification_raw = CalendarRsvpPosts.build_notification_raw(username, action_label, event)
-              PostCreator.create!(
-                Discourse.system_user,
-                topic_id: event.post.topic_id,
-                raw: notification_raw,
-                skip_validations: true
-              )
-            end
+            # Hand off to the background job (see the create/update handler).
+            Jobs.enqueue(
+              :process_calendar_rsvp_post,
+              event_id: event.id,
+              username: username,
+              action_label: action_label,
+              extra_text: nil
+            )
           rescue StandardError => e
             Rails.logger.warn("calendar-rsvp-posts: after_destroy handler error: #{e}")
             Rails.logger.warn(e.backtrace.join("\n"))
