@@ -17,6 +17,7 @@ This ensures:
 
 Install:
 - Create a GitHub repo from this directory, clone into your Discourse `plugins/` and restart Discourse.
+- Requires Discourse 2026.9.0-latest or newer (the Events plugin, formerly Calendar). Older Discourse automatically gets the last compatible version via `.discourse-compatibility`.
 
 Site settings (in Admin > Settings > Plugins):
 - `calendar_rsvp_posts_on_new_going`: post on new "Going"

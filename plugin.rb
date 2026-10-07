@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 # name: discourse-calendar-rsvp-posts
 # about: Create short topic replies for RSVP events
-# version: 0.4
+# version: 0.5
 # authors: Mario Santana, gilles
 
 after_initialize do
@@ -87,7 +87,8 @@ after_initialize do
     def self.append_to_history(existing_raw, new_entry)
       # Insert the new entry right after the header (before oldest entries)
       lines = existing_raw.split("\n")
-      header_end_idx = lines.index { |line| line.start_with?("### RSVP History") }
+      # Match any "### " heading, not the English text, so translated headers work
+      header_end_idx = lines.index { |line| line.start_with?("### ") }
       
       if header_end_idx
         # Insert after header and blank line
@@ -256,7 +257,7 @@ after_initialize do
   module ::Jobs
     class ProcessCalendarRsvpPost < ::Jobs::Base
       def execute(args)
-        event = DiscoursePostEvent::Event.find_by(id: args[:event_id])
+        event = DiscourseEvents::Events::Event.find_by(id: args[:event_id])
         return unless event
 
         ::CalendarRsvpPosts.publish_rsvp_update(
@@ -276,17 +277,26 @@ after_initialize do
       next if event.nil?
       next unless CalendarRsvpPosts.should_post_for_event?(event)
 
-      going_val = DiscoursePostEvent::Invitee.statuses[:going]
-      interested_val = DiscoursePostEvent::Invitee.statuses[:interested]
-      not_going_val = DiscoursePostEvent::Invitee.statuses[:not_going]
+      going_val = DiscourseEvents::Events::Invitee.statuses[:going]
+      interested_val = DiscourseEvents::Events::Invitee.statuses[:interested]
+      not_going_val = DiscourseEvents::Events::Invitee.statuses[:not_going]
 
-      new_status = invitee.status
-      prev_status =
-        if invitee.respond_to?(:previous_changes) && invitee.previous_changes["status"]
-          invitee.previous_changes["status"][0]
-        else
-          nil
-        end
+      # discourse-events fires this same event after destroying an invitee
+      # (DestroyInvitee: destroy!, then publish_attendance_removed!), so a
+      # destroyed invitee is a removed RSVP and its status is the old one.
+      removed = invitee.destroyed?
+      if removed
+        prev_status = invitee.status
+        new_status = nil
+      else
+        new_status = invitee.status
+        prev_status =
+          if invitee.respond_to?(:previous_changes) && invitee.previous_changes["status"]
+            invitee.previous_changes["status"][0]
+          else
+            nil
+          end
+      end
 
       # ignore if RSVP didn't change
       next if prev_status && prev_status == new_status
@@ -295,7 +305,9 @@ after_initialize do
       action_label = nil
 
       # Determine whether this qualifies as a "new" RSVP (create) or an update
-      if new_status == going_val && SiteSetting.calendar_rsvp_posts_on_new_going
+      if removed
+        action_label = I18n.t('calendar_rsvp_posts.actions.removed') if SiteSetting.calendar_rsvp_posts_on_removed_rsvp
+      elsif new_status == going_val && SiteSetting.calendar_rsvp_posts_on_new_going
         action_label = I18n.t('calendar_rsvp_posts.actions.going')
       elsif new_status == interested_val && SiteSetting.calendar_rsvp_posts_on_new_interested
         action_label = I18n.t('calendar_rsvp_posts.actions.interested')
@@ -345,38 +357,6 @@ after_initialize do
     end
   end
 
-  # Handler for create/update attendance triggered by the calendar plugin
+  # discourse-events triggers this on create, update, and removal of an RSVP
   on(:discourse_calendar_post_event_invitee_status_changed, &proc_handler)
-
-  # Also handle explicit invitee deletions (removed RSVP)
-  if defined?(DiscoursePostEvent::Invitee)
-    DiscoursePostEvent::Invitee.class_eval do
-      after_destroy do
-        event = self.event
-        # Skip if no event, not configured, or past event (when not allowed)
-        should_process = event.present? &&
-                         SiteSetting.calendar_rsvp_posts_on_removed_rsvp &&
-                         (SiteSetting.calendar_rsvp_posts_allow_past_events || event.starts_at.nil? || event.starts_at >= Time.current)
-        
-        if should_process
-          begin
-            username = self.user&.username || "someone"
-            action_label = I18n.t('calendar_rsvp_posts.actions.removed')
-
-            # Hand off to the background job (see the create/update handler).
-            Jobs.enqueue(
-              :process_calendar_rsvp_post,
-              event_id: event.id,
-              username: username,
-              action_label: action_label,
-              extra_text: nil
-            )
-          rescue StandardError => e
-            Rails.logger.warn("calendar-rsvp-posts: after_destroy handler error: #{e}")
-            Rails.logger.warn(e.backtrace.join("\n"))
-          end
-        end
-      end
-    end
-  end
 end
